@@ -153,5 +153,43 @@ FINDINGS_TEMPLATE.md filled with:
 
 ---
 
-## Step 10 — Git init and push (STOP GATE)
+## Step 10 — Git init and push (STOP GATE — confirmed by user)
 
+```
+$ git init
+Initialized empty Git repository in D:/AWS Bonus Assigenment/.git/
+
+$ git add .
+# staged 29 files — .env confirmed absent (gitignore working)
+
+$ git commit -m "Insurance claim processing POC — AWS Bedrock, RAG, model comparison"
+[master 6375251] Insurance claim processing POC — AWS Bedrock, RAG, model comparison
+ 29 files changed, 1583 insertions(+)
+
+$ git remote add origin https://github.com/Adithya0805/insurance-claims-bedrock-poc.git
+$ git branch -M main
+$ git push -u origin main
+branch 'main' set up to track 'origin/main'.
+To https://github.com/Adithya0805/insurance-claims-bedrock-poc.git
+ * [new branch]      main -> main
+```
+✅ Code live at https://github.com/Adithya0805/insurance-claims-bedrock-poc
+✅ .env excluded — no secrets in repo.
+
+---
+
+## Step 11 — Cost cleanup reminder (DO NOT AUTO-EXECUTE)
+
+Run these manually when done demoing:
+
+```bash
+aws s3 rb s3://claim-documents-poc-adhi --force
+```
+
+Also: revoke Bedrock model access in the console if not using it again this month.
+Note: Bedrock Model Access page has been retired — access is now IAM-controlled.
+To restrict: AWS Console → IAM → Policies → deny bedrock:InvokeModel for your user.
+
+---
+
+## Pipeline complete — 2026-07-03
