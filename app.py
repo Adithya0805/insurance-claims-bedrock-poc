@@ -74,7 +74,7 @@ def upload_claim():
 def process_claim(key):
     try:
         # Check optional models overrides
-        data = request.json or {}
+        data = request.get_json(silent=True) or {}
         extraction_model = data.get('extraction_model', Config.EXTRACTION_MODEL_ID)
         summary_model = data.get('summary_model', Config.SUMMARY_MODEL_ID)
         
