@@ -1,0 +1,15 @@
+INSURANCE CLAIM FORM
+
+Claimant Name: Suresh Babu Iyer
+Policy Number: HLTH-TN-31042
+Date of Incident: 2026-04-28
+Claim Amount Requested: INR 92500
+
+Incident Description:
+Claimant was hospitalized for 3 days (April 28-30, 2026) at Ambur General
+Hospital for treatment of acute appendicitis, followed by laparoscopic
+appendectomy. Discharge summary, itemized hospital bill, and pre-admission
+diagnostic reports are attached. This is a planned cashless-to-reimbursement
+conversion after initial cashless approval was partially delayed.
+
+Contact: suresh.iyer@example.com

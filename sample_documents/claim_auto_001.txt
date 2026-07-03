@@ -1,0 +1,16 @@
+INSURANCE CLAIM FORM
+
+Claimant Name: Rajesh Kumar Menon
+Policy Number: AUTO-TN-88213
+Date of Incident: 2026-05-14
+Claim Amount Requested: INR 145000
+
+Incident Description:
+On the evening of May 14, 2026, the claimant's vehicle (Registration No.
+TN 09 AB 4521) was rear-ended at a signal on Anna Salai, Chennai, by
+another vehicle. The rear bumper, tail lamp assembly, and trunk panel
+sustained damage. A police complaint (FIR No. 2026/CHN/1187) was filed
+at T. Nagar police station on the same evening. No injuries were reported.
+Repair estimate obtained from an authorized service center is attached.
+
+Contact: rajesh.menon@example.com
