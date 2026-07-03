@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AWS Bedrock Claim Processor POC Dashboard</title>
+    <!-- Modern Premium Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="glow-bg"></div>
+
+    <div class="app-container">
+        <!-- HEADER -->
+        <header class="app-header">
+            <div class="logo-area">
+                <span class="logo-icon">⚡</span>
+                <div>
+                    <h1>AWS Bedrock Claim Processor</h1>
+                    <p class="subtitle">Cloud-Native Intelligent Insurance Triage POC</p>
+                </div>
+            </div>
+            <div class="stats-counter">
+                <div class="stat-pill">
+                    <span class="stat-label">S3 Bucket:</span>
+                    <span class="stat-value" id="bucket-name">claim-documents-poc-adhi</span>
+                </div>
+                <div class="stat-pill">
+                    <span class="stat-label">Bedrock Mode:</span>
+                    <span class="stat-value highlight">Mock Mode Active</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- DASHBOARD GRID -->
+        <div class="dashboard-grid">
+            
+            <!-- LEFT PANEL: Upload & Claim List -->
+            <aside class="panel left-panel">
+                <div class="panel-header">
+                    <h2>Incoming Claims</h2>
+                </div>
+                
+                <!-- Drag and Drop Area -->
+                <div class="upload-zone" id="upload-zone">
+                    <div class="upload-icon">📤</div>
+                    <p class="upload-text">Drag & drop claim file here</p>
+                    <p class="upload-subtext">Supports text files (.txt)</p>
+                    <input type="file" id="file-input" accept=".txt" style="display: none;">
+                    <button class="btn btn-secondary btn-sm" id="upload-btn">Browse Files</button>
+                </div>
+
+                <div class="claim-list-container">
+                    <div class="list-title">Active Claims in S3</div>
+                    <div class="claim-list" id="claim-list">
+                        <!-- Filled by JS -->
+                        <div class="loading">Loading S3 objects...</div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- CENTER PANEL: Claim Details & RAG Policy -->
+            <main class="panel center-panel">
+                <div class="panel-header">
+                    <div class="tab-headers">
+                        <button class="tab-btn active" data-tab="tab-raw">📄 Claim Document</button>
+                        <button class="tab-btn" data-tab="tab-rag">📚 Matching Policy (RAG)</button>
+                    </div>
+                </div>
+
+                <div class="tab-content active" id="tab-raw">
+                    <div class="viewer-body">
+                        <pre class="document-viewer empty" id="raw-document-text">Select a claim from the list to display its raw document content here...</pre>
+                    </div>
+                </div>
+
+                <div class="tab-content" id="tab-rag">
+                    <div class="viewer-body">
+                        <div class="policy-details" id="policy-details-content">
+                            <p class="placeholder-text">Process the claim first to match policy segments using vector embeddings...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-actions">
+                    <button class="btn btn-primary" id="process-claim-btn" disabled>
+                        <span>✨ Process Claim (AI Triage)</span>
+                    </button>
+                    <button class="btn btn-secondary" id="compare-models-btn" disabled>
+                        <span>📊 Compare Models</span>
+                    </button>
+                </div>
+            </main>
+
+            <!-- RIGHT PANEL: AI Adjuster Summary -->
+            <section class="panel right-panel">
+                <div class="panel-header">
+                    <h2>AI Triage Summary</h2>
+                </div>
+
+                <div class="summary-card" id="summary-card">
+                    <div class="summary-placeholder">
+                        <span class="placeholder-icon">🤖</span>
+                        <p>Select a claim and process it to generate the adjuster-facing summary.</p>
+                    </div>
+                </div>
+
+                <div class="details-section">
+                    <h3>Extracted Facts</h3>
+                    <div class="fact-grid" id="fact-grid">
+                        <div class="fact-item"><span class="fact-lbl">Claimant:</span><span class="fact-val" id="fact-name">-</span></div>
+                        <div class="fact-item"><span class="fact-lbl">Policy No:</span><span class="fact-val font-mono" id="fact-policy">-</span></div>
+                        <div class="fact-item"><span class="fact-lbl">Date:</span><span class="fact-val" id="fact-date">-</span></div>
+                        <div class="fact-item"><span class="fact-lbl">Amount:</span><span class="fact-val highlight" id="fact-amount">-</span></div>
+                        <div class="fact-item"><span class="fact-lbl">Type:</span><span class="fact-val" id="fact-type">-</span></div>
+                    </div>
+                </div>
+
+                <div class="metrics-section">
+                    <h3>Performance Metrics</h3>
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <div class="metric-title">Speed (Latency)</div>
+                            <div class="metric-val" id="metric-latency">-</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-title">Estimated Cost</div>
+                            <div class="metric-val highlight" id="metric-cost">-</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+    </div>
+
+    <!-- COMPARISON MODAL -->
+    <div class="modal" id="compare-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Model Performance Comparison</h2>
+                <span class="modal-close" id="modal-close-btn">&times;</span>
+            </div>
+            <div class="modal-body">
+                <p class="modal-desc">Evaluating performance side-by-side on current claim document:</p>
+                <div class="table-container">
+                    <table class="compare-table" id="compare-table">
+                        <thead>
+                            <tr>
+                                <th>Model Name</th>
+                                <th>Latency (s)</th>
+                                <th>Input Tokens</th>
+                                <th>Output Tokens</th>
+                                <th>Valid JSON?</th>
+                                <th>Warnings</th>
+                            </tr>
+                        </thead>
+                        <tbody id="compare-table-body">
+                            <!-- Filled dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+                <div class="comparison-note">
+                    <p>💡 **Note:** Values are simulated locally based on average Claude 3 throughput benchmarks. Costs scale linearly based on tokens.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="main.js"></script>
+</body>
+</html>
