@@ -815,3 +815,14 @@ body {
     font-weight: bold;
 }
 
+/* Scrollable Panel Body */
+.right-panel-body {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    padding-bottom: 20px;
+}
+
+
