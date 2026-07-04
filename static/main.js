@@ -23,7 +23,8 @@ async function loadClaimsList() {
         const data = await response.json();
         
         if (data.status === 'success') {
-            claimsList = data.claims;
+            // Sort to ensure images are processed logically
+            claimsList = data.claims.sort();
             renderClaimsList();
         } else {
             listElement.innerHTML = `<div class="loading error">Error: ${data.message}</div>`;
@@ -54,7 +55,11 @@ function renderClaimsList() {
         const badgeText = isProcessed ? 'Processed' : 'Unprocessed';
 
         // Extract clean name
-        const cleanName = key.replace('.txt', '').replace('claim_', '').toUpperCase();
+        const cleanName = key.replace('.txt', '').replace('.png', '').replace('claim_', '').toUpperCase();
+        
+        // Check if image
+        const isImage = key.toLowerCase().endsWith('.png') || key.toLowerCase().endsWith('.jpg');
+        const typeIcon = isImage ? '📷 Scan' : '📄 Doc';
 
         item.innerHTML = `
             <div class="claim-title-row">
@@ -63,7 +68,7 @@ function renderClaimsList() {
             </div>
             <div class="claim-meta-row">
                 <span>Code: ${cleanName}</span>
-                <span>Type: ${isProcessed ? processedClaims[key].extracted_info.claim_type : 'Unknown'}</span>
+                <span>Type: ${typeIcon}</span>
             </div>
         `;
 
@@ -82,25 +87,44 @@ async function selectClaim(key) {
     document.getElementById('compare-models-btn').disabled = false;
 
     // Reset details tab
-    document.getElementById('raw-document-text').textContent = 'Loading claim content...';
-    document.getElementById('raw-document-text').classList.remove('empty');
+    const textViewer = document.getElementById('raw-document-text');
+    const imageContainer = document.getElementById('image-viewer-container');
+    const imageElement = document.getElementById('image-viewer-img');
+
+    textViewer.textContent = 'Loading claim content...';
+    textViewer.classList.remove('empty');
+    textViewer.style.display = 'block';
+    imageContainer.style.display = 'none';
+
+    // Hide Fraud Shield Card initially
+    document.getElementById('fraud-shield-card').style.display = 'none';
+
+    const isImage = key.toLowerCase().endsWith('.png') || key.toLowerCase().endsWith('.jpg') || key.toLowerCase().endsWith('.jpeg');
+    
+    if (isImage) {
+        // Toggle view: show Image Container and hide standard text viewer
+        textViewer.style.display = 'none';
+        imageContainer.style.display = 'flex';
+        // Point image source to backend endpoint
+        imageElement.src = `/api/claims/image/${encodeURIComponent(key)}`;
+    } else {
+        try {
+            const response = await fetch(`/api/claims/${encodeURIComponent(key)}`);
+            const data = await response.json();
+            if (data.status === 'success') {
+                textViewer.textContent = data.text;
+            } else {
+                textViewer.textContent = `Error loading document: ${data.message}`;
+            }
+        } catch (e) {
+            textViewer.textContent = 'Failed to load claim document.';
+        }
+    }
 
     // Reset RAG policy tab
     document.getElementById('policy-details-content').innerHTML = `
         <p class="placeholder-text">Process the claim first to match policy segments using vector embeddings...</p>
     `;
-
-    try {
-        const response = await fetch(`/api/claims/${encodeURIComponent(key)}`);
-        const data = await response.json();
-        if (data.status === 'success') {
-            document.getElementById('raw-document-text').textContent = data.text;
-        } else {
-            document.getElementById('raw-document-text').textContent = `Error loading document: ${data.message}`;
-        }
-    } catch (e) {
-        document.getElementById('raw-document-text').textContent = 'Failed to load claim document.';
-    }
 
     // Load cached result if previously processed
     if (processedClaims[key]) {
@@ -137,6 +161,10 @@ async function processActiveClaim() {
         if (data.status === 'success') {
             const result = data.result;
             processedClaims[activeClaimKey] = result;
+            
+            // Run Fraud Check analysis
+            await runFraudShieldCheck(result.extracted_info);
+            
             displayProcessedResult(result);
             renderClaimsList(); // Update badges
         } else {
@@ -158,20 +186,90 @@ async function processActiveClaim() {
     }
 }
 
-// 5. Populate Result Details into UI Panels
+// 5. Fraud Shield Checker Integration
+async function runFraudShieldCheck(extractedInfo) {
+    const card = document.getElementById('fraud-shield-card');
+    const badge = document.getElementById('fraud-risk-badge');
+    const bar = document.getElementById('fraud-risk-bar');
+    const list = document.getElementById('fraud-reasons-list');
+
+    try {
+        const response = await fetch(`/api/claims/fraud-check/${encodeURIComponent(activeClaimKey)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(extractedInfo)
+        });
+        const data = await response.json();
+
+        if (data.status === 'success' && data.risk_score > 0) {
+            card.style.display = 'block';
+            
+            // Update score
+            const score = data.risk_score;
+            badge.textContent = `${score}% ${score > 50 ? 'High Risk' : 'Medium Risk'}`;
+            badge.className = `claim-badge ${score > 50 ? 'badge-pending' : 'badge-pending'}`;
+            
+            // Make badge background red for high risk
+            if (score > 50) {
+                badge.style.background = 'rgba(239, 68, 68, 0.15)';
+                badge.style.color = 'var(--error-color)';
+                badge.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+            }
+            
+            bar.style.width = `${score}%`;
+            
+            // Populate list
+            list.innerHTML = '';
+            data.reasons.forEach(reason => {
+                const li = document.createElement('li');
+                li.textContent = reason;
+                list.appendChild(li);
+            });
+        } else {
+            // Low risk or no duplicate matches
+            card.style.display = 'block';
+            badge.textContent = '0% Low Risk';
+            badge.style.background = 'rgba(16, 185, 129, 0.1)';
+            badge.style.color = 'var(--success-color)';
+            badge.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+            bar.style.width = '0%';
+            list.innerHTML = '<li>No overlapping claim indicators detected in S3 storage.</li>';
+        }
+    } catch(e) {
+        card.style.display = 'none';
+    }
+}
+
+// 6. Populate Result Details into UI Panels
 function displayProcessedResult(result) {
     // 1. Populate summary narrative
     document.getElementById('summary-card').innerHTML = `
         <p class="summary-text-actual">${result.summary}</p>
     `;
 
-    // 2. Populate extracted facts
+    // 2. Populate extracted facts (Enable inputs)
     const info = result.extracted_info;
-    document.getElementById('fact-name').textContent = info.claimant_name || 'N/A';
-    document.getElementById('fact-policy').textContent = info.policy_number || 'N/A';
-    document.getElementById('fact-date').textContent = info.incident_date || 'N/A';
-    document.getElementById('fact-amount').textContent = `INR ${Number(info.claim_amount).toLocaleString('en-IN')}`;
-    document.getElementById('fact-type').textContent = (info.claim_type || 'N/A').toUpperCase();
+    
+    const nameInput = document.getElementById('fact-name');
+    const policyInput = document.getElementById('fact-policy');
+    const dateInput = document.getElementById('fact-date');
+    const amountInput = document.getElementById('fact-amount');
+    const typeSelect = document.getElementById('fact-type');
+
+    nameInput.value = info.claimant_name || '';
+    policyInput.value = info.policy_number || '';
+    dateInput.value = info.incident_date || '';
+    amountInput.value = info.claim_amount || 0;
+    typeSelect.value = info.claim_type || 'auto';
+
+    nameInput.disabled = false;
+    policyInput.disabled = false;
+    dateInput.disabled = false;
+    amountInput.disabled = false;
+    typeSelect.disabled = false;
+
+    // Enable Finalize button
+    document.getElementById('finalize-audit-btn').disabled = false;
 
     // 3. Populate performance stats card
     const latHaiku = result.metrics.extraction_latency_s;
@@ -226,7 +324,7 @@ function displayProcessedResult(result) {
     `;
 }
 
-// 6. Compare Models API call
+// 7. Compare Models API call
 async function compareActiveClaim() {
     if (!activeClaimKey) return;
 
@@ -261,6 +359,22 @@ async function compareActiveClaim() {
     }
 }
 
+// 8. Handle Finalize & Approve Audit Action
+function finalizeAudit() {
+    const name = document.getElementById('fact-name').value;
+    const amount = document.getElementById('fact-amount').value;
+    
+    alert(`🎉 AUDIT FINALIZED!\n\nClaimant: ${name}\nApproved Payout: INR ${Number(amount).toLocaleString('en-IN')}\nStatus: Payout approved & transaction routed to core banking ledger!`);
+    
+    // Disable inputs again to show saved state
+    document.getElementById('fact-name').disabled = true;
+    document.getElementById('fact-policy').disabled = true;
+    document.getElementById('fact-date').disabled = true;
+    document.getElementById('fact-amount').disabled = true;
+    document.getElementById('fact-type').disabled = true;
+    document.getElementById('finalize-audit-btn').disabled = true;
+}
+
 // Helper resets
 function resetSummaryDetails() {
     document.getElementById('summary-card').innerHTML = `
@@ -269,20 +383,36 @@ function resetSummaryDetails() {
             <p>Ready to process this claim. Click "Process Claim" to run RAG + AI triage.</p>
         </div>
     `;
-    document.getElementById('fact-name').textContent = '-';
-    document.getElementById('fact-policy').textContent = '-';
-    document.getElementById('fact-date').textContent = '-';
-    document.getElementById('fact-amount').textContent = '-';
-    document.getElementById('fact-type').textContent = '-';
+    
+    const nameInput = document.getElementById('fact-name');
+    const policyInput = document.getElementById('fact-policy');
+    const dateInput = document.getElementById('fact-date');
+    const amountInput = document.getElementById('fact-amount');
+    const typeSelect = document.getElementById('fact-type');
+
+    nameInput.value = '';
+    policyInput.value = '';
+    dateInput.value = '';
+    amountInput.value = '';
+    typeSelect.value = 'auto';
+
+    nameInput.disabled = true;
+    policyInput.disabled = true;
+    dateInput.disabled = true;
+    amountInput.disabled = true;
+    typeSelect.disabled = true;
+
     document.getElementById('metric-latency').textContent = '-';
     document.getElementById('metric-cost').textContent = '-';
+    document.getElementById('finalize-audit-btn').disabled = true;
 }
 
-// 7. General event handlers & UI setup
+// 9. General event handlers & UI setup
 function setupEventListeners() {
-    // Process & Compare click bindings
+    // Process, Compare, & Finalize click bindings
     document.getElementById('process-claim-btn').addEventListener('click', processActiveClaim);
     document.getElementById('compare-models-btn').addEventListener('click', compareActiveClaim);
+    document.getElementById('finalize-audit-btn').addEventListener('click', finalizeAudit);
 
     // Tab buttons switching
     document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -301,7 +431,7 @@ function setupEventListeners() {
     });
 }
 
-// 8. Drag and Drop file handler
+// 10. Drag and Drop file handler
 function setupDragAndDrop() {
     const zone = document.getElementById('upload-zone');
     const input = document.getElementById('file-input');
@@ -330,10 +460,13 @@ function setupDragAndDrop() {
     });
 }
 
-// 9. Upload File API
+// 11. Upload File API
 async function uploadFile(file) {
-    if (!file.name.endsWith('.txt')) {
-        alert('Please upload only text (.txt) documents.');
+    const isTxt = file.name.endsWith('.txt');
+    const isImg = file.name.endsWith('.png') || file.name.endsWith('.jpg') || file.name.endsWith('.jpeg');
+    
+    if (!isTxt && !isImg) {
+        alert('Please upload only text (.txt) or image (.png, .jpg) files.');
         return;
     }
 

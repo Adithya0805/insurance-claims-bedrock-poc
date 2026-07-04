@@ -46,8 +46,8 @@
                 <div class="upload-zone" id="upload-zone">
                     <div class="upload-icon">📤</div>
                     <p class="upload-text">Drag & drop claim file here</p>
-                    <p class="upload-subtext">Supports text files (.txt)</p>
-                    <input type="file" id="file-input" accept=".txt" style="display: none;">
+                    <p class="upload-subtext">Supports text (.txt) & images (.png, .jpg)</p>
+                    <input type="file" id="file-input" accept=".txt,.png,.jpg,.jpeg" style="display: none;">
                     <button class="btn btn-secondary btn-sm" id="upload-btn">Browse Files</button>
                 </div>
 
@@ -70,8 +70,11 @@
                 </div>
 
                 <div class="tab-content active" id="tab-raw">
-                    <div class="viewer-body">
+                    <div class="viewer-body relative-viewer">
                         <pre class="document-viewer empty" id="raw-document-text">Select a claim from the list to display its raw document content here...</pre>
+                        <div class="image-viewer-container" id="image-viewer-container" style="display: none;">
+                            <img src="" alt="Claim Attachment Scan" class="image-viewer-img" id="image-viewer-img">
+                        </div>
                     </div>
                 </div>
 
@@ -106,20 +109,57 @@
                     </div>
                 </div>
 
+                <!-- NEW: Fraud Shield Risk Card -->
+                <div class="fraud-shield-section" id="fraud-shield-card" style="display: none;">
+                    <h3>🛡️ Fraud Shield Check</h3>
+                    <div class="fraud-risk-container">
+                        <div class="risk-gauge-row">
+                            <span class="risk-lbl">Risk Probability:</span>
+                            <span class="risk-badge badge-pending" id="fraud-risk-badge">0% Low</span>
+                        </div>
+                        <div class="risk-bar-bg">
+                            <div class="risk-bar-fill" id="fraud-risk-bar" style="width: 0%;"></div>
+                        </div>
+                        <ul class="fraud-reasons" id="fraud-reasons-list">
+                            <!-- Populated dynamically -->
+                        </ul>
+                    </div>
+                </div>
+
                 <div class="details-section">
-                    <h3>Extracted Facts</h3>
+                    <h3>Extracted Facts (Editable)</h3>
                     <div class="fact-grid" id="fact-grid">
-                        <div class="fact-item"><span class="fact-lbl">Claimant:</span><span class="fact-val" id="fact-name">-</span></div>
-                        <div class="fact-item"><span class="fact-lbl">Policy No:</span><span class="fact-val font-mono" id="fact-policy">-</span></div>
-                        <div class="fact-item"><span class="fact-lbl">Date:</span><span class="fact-val" id="fact-date">-</span></div>
-                        <div class="fact-item"><span class="fact-lbl">Amount:</span><span class="fact-val highlight" id="fact-amount">-</span></div>
-                        <div class="fact-item"><span class="fact-lbl">Type:</span><span class="fact-val" id="fact-type">-</span></div>
+                        <div class="fact-item-input">
+                            <label class="input-lbl">Claimant:</label>
+                            <input type="text" class="form-input" id="fact-name" value="" disabled>
+                        </div>
+                        <div class="fact-item-input">
+                            <label class="input-lbl">Policy No:</label>
+                            <input type="text" class="form-input font-mono" id="fact-policy" value="" disabled>
+                        </div>
+                        <div class="fact-item-input">
+                            <label class="input-lbl">Incident Date:</label>
+                            <input type="text" class="form-input" id="fact-date" value="" disabled>
+                        </div>
+                        <div class="fact-item-input">
+                            <label class="input-lbl">Amount (INR):</label>
+                            <input type="number" class="form-input" id="fact-amount" value="" disabled>
+                        </div>
+                        <div class="fact-item-input">
+                            <label class="input-lbl">Claim Type:</label>
+                            <select class="form-input" id="fact-type" disabled>
+                                <option value="auto">AUTO</option>
+                                <option value="property">PROPERTY</option>
+                                <option value="health">HEALTH</option>
+                                <option value="other">OTHER</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
 
                 <div class="metrics-section">
                     <h3>Performance Metrics</h3>
-                    <div class="metrics-grid">
+                    <div class="metrics-grid" style="margin-bottom: 15px;">
                         <div class="metric-card">
                             <div class="metric-title">Speed (Latency)</div>
                             <div class="metric-val" id="metric-latency">-</div>
@@ -129,6 +169,9 @@
                             <div class="metric-val highlight" id="metric-cost">-</div>
                         </div>
                     </div>
+                    <button class="btn btn-primary btn-block" id="finalize-audit-btn" disabled style="width: 100%;">
+                        <span>✔️ Finalize & Approve Payout</span>
+                    </button>
                 </div>
             </section>
 

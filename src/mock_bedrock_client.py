@@ -54,7 +54,30 @@ _EXTRACTIONS = {
         ),
         "claim_type": "health",
     },
+    "repair_invoice_004.png": {
+        "claimant_name": "Rajesh Kumar Menon",
+        "policy_number": "AUTO-TN-88213",
+        "incident_date": "2026-05-15",
+        "claim_amount": 145000,
+        "incident_description": (
+            "Scanned auto repair invoice from Chennai Auto Care. Bumper assembly, "
+            "taillight unit, and bodywork labor listed for a total of INR 145,000."
+        ),
+        "claim_type": "auto",
+    },
+    "car_damage_005.png": {
+        "claimant_name": "Rajesh Kumar Menon",
+        "policy_number": "AUTO-TN-88213",
+        "incident_date": "2026-05-14",
+        "claim_amount": 145000,
+        "incident_description": (
+            "Visual inspection photograph of blue sedan rear bumper damage, cracked "
+            "taillight, and trunk dent. Match for accident claim description."
+        ),
+        "claim_type": "auto",
+    },
 }
+
 
 # ---------------------------------------------------------------------------
 # Pre-crafted summary responses — grounded in policy knowledge files

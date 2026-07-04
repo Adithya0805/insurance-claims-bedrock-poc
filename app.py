@@ -106,6 +106,61 @@ def compare_models(key):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
+# API: Serve raw image content for S3 or local fallback
+@app.route('/api/claims/image/<path:key>', methods=['GET'])
+def get_claim_image(key):
+    try:
+        if s3.available:
+            # Fetch directly from S3
+            response = s3.client.get_object(Bucket=s3.bucket, Key=key)
+            return response['Body'].read(), 200, {'Content-Type': 'image/png'}
+        
+        # Local fallback
+        local_path = os.path.join(Config.LOCAL_DOCS_DIR, key)
+        return send_from_directory(Config.LOCAL_DOCS_DIR, key, mimetype='image/png')
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 404
+
+# API: Fraud Shield Checker
+@app.route('/api/claims/fraud-check/<path:key>', methods=['POST'])
+def check_fraud(key):
+    try:
+        data = request.get_json(silent=True) or {}
+        claimant = data.get('claimant_name', '')
+        policy = data.get('policy_number', '')
+        amount = float(data.get('claim_amount', 0))
+
+        risk_score = 0
+        reasons = []
+
+        # List all other claims in S3 (excluding current key)
+        all_keys = s3.list_documents()
+        for other_key in all_keys:
+            if other_key == key:
+                continue
+            
+            # Simple check: does the other claim text contain matching identifiers?
+            text = s3.get_document_text(other_key).lower()
+            
+            if claimant.lower() and claimant.lower() in text:
+                risk_score += 45
+                reasons.append(f"Matching claimant '{claimant}' found in file '{other_key}'")
+            if policy.lower() and policy.lower() in text:
+                risk_score += 50
+                reasons.append(f"Matching policy number '{policy}' found in file '{other_key}'")
+            
+        # Limit score to 100 max
+        risk_score = min(risk_score, 100)
+        
+        return jsonify({
+            "status": "success",
+            "risk_score": risk_score,
+            "reasons": reasons
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 if __name__ == '__main__':
     # Run locally on port 5000
     app.run(debug=True, host='127.0.0.1', port=5000)
