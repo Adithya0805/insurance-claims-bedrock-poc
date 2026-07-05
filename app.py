@@ -17,6 +17,21 @@ Config.validate()
 s3 = S3Handler()
 processor = ClaimProcessor()
 
+# Initialize live DynamoDB connection for cloud result synchronization
+db_table = None
+if s3.available:
+    try:
+        import boto3
+        dynamodb = boto3.resource('dynamodb', region_name=Config.AWS_REGION or "us-east-1")
+        table = dynamodb.Table('ClaimResults')
+        # Load schema to verify existence
+        table.load()
+        db_table = table
+        print("[dynamodb] Connected to live ClaimResults table in AWS Cloud")
+    except Exception as e:
+        print(f"[dynamodb] Live table ClaimResults not active or accessible (using local fallback): {e}")
+        db_table = None
+
 # Serve Frontend SPA
 @app.route('/')
 def index():
@@ -73,7 +88,41 @@ def upload_claim():
 @app.route('/api/claims/process/<path:key>', methods=['POST'])
 def process_claim(key):
     try:
-        # Check optional models overrides
+        # 1. Attempt to fetch Cloud-processed result from DynamoDB
+        if db_table:
+            try:
+                db_res = db_table.get_item(Key={"document_id": key})
+                if "Item" in db_res:
+                    item = db_res["Item"]
+                    print(f"[dynamodb] Found Cloud processed record for {key}")
+                    
+                    # Convert DynamoDB Decimals to float/int
+                    extracted_info = item.get("extracted_info", {})
+                    if "claim_amount" in extracted_info:
+                        extracted_info["claim_amount"] = float(extracted_info["claim_amount"])
+                    
+                    # Map Decimal processed_timestamp to int
+                    timestamp = item.get("processed_timestamp")
+                    if timestamp is not None:
+                        timestamp = int(timestamp)
+                        
+                    return jsonify({
+                        "status": "success",
+                        "result": {
+                            "status": item.get("status", "processed"),
+                            "extracted_info": extracted_info,
+                            "summary": item.get("summary", ""),
+                            "validation_warnings": item.get("validation_warnings", []),
+                            "injection_flags": item.get("injection_flags", []),
+                            "processed_timestamp": timestamp,
+                            "metrics": item.get("metrics", {}),
+                            "source": "AWS Cloud (DynamoDB)"
+                        }
+                    })
+            except Exception as dbe:
+                print(f"[dynamodb] GetItem failed, falling back to processor: {dbe}")
+                
+        # 2. Local fallback if not found in DynamoDB or DB disabled
         data = request.get_json(silent=True) or {}
         extraction_model = data.get('extraction_model', Config.EXTRACTION_MODEL_ID)
         summary_model = data.get('summary_model', Config.SUMMARY_MODEL_ID)
@@ -83,6 +132,7 @@ def process_claim(key):
             extraction_model=extraction_model, 
             summary_model=summary_model
         )
+        result["source"] = "Local Simulator"
         return jsonify({"status": "success", "result": result})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
