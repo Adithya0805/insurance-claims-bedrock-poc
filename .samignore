@@ -1,0 +1,19 @@
+# Exclude Python virtual environment
+venv/
+
+# Exclude Git folder
+.git/
+
+# Exclude caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Exclude temp folders
+scratch/
+results/
+images/
+.aws-sam/
+.gemini/
+.env

@@ -193,3 +193,213 @@ To restrict: AWS Console → IAM → Policies → deny bedrock:InvokeModel for y
 ---
 
 ## Pipeline complete — 2026-07-03
+
+---
+
+# Serverless Migration — AWS SAM & Step Functions
+
+## Step 1 — Install SAM CLI
+
+```
+$ sam --version
+SAM CLI, version 1.163.0
+```
+✅ SAM CLI successfully installed.
+
+---
+
+## Step 2 — Scaffold the SAM project structure
+
+`template.yaml` created with:
+- 4 Lambda functions: `OcrHandlerFunction`, `ExtractClassifyFunction`, `RagRetrieveFunction`, `SummarizeTranslateFunction` (all referencing shared modules in `src/` via `CodeUri: .`).
+- DynamoDB Table: `ClaimResults` (PrimaryKey: `document_id`).
+- Step Functions State Machine: `ClaimProcessingStateMachine` coordinating the Lambda executions in sequence and handling DynamoDB writes.
+- Scoped IAM permissions for S3, DynamoDB, and Bedrock.
+- Lambdas: `lambdas/ocr_handler.py`, `lambdas/extract_classify_handler.py`, `lambdas/rag_retrieve_handler.py`, `lambdas/summarize_translate_handler.py` created.
+
+---
+
+## Step 3 — Local test with SAM
+
+`.samignore` created to exclude packaging virtual environment folders.
+
+```
+$ sam build
+Building codeuri: D:\AWS Bonus Assigenment runtime: python3.12 architecture: x86_64
+Built Artifacts  : .aws-sam\build
+Built Template   : .aws-sam\build\template.yaml
+Build Succeeded
+```
+
+Since Docker was not running in the Windows VM environment to run `sam local invoke`, the 4 handlers were executed sequentially via a verification script inside the Python virtual environment:
+```
+$ .\venv\Scripts\python scratch\verify_handlers.py
+--- Testing OCR Handler ---
+[s3] reading s3://claim-documents-poc-adhi/claim_auto_001.txt
+OCR Output Key: claim_auto_001.txt
+
+--- Testing Extract/Classify Handler ---
+Extract Status: success
+Extracted claimant: Rajesh Kumar Menon
+
+--- Testing RAG Retrieve Handler ---
+[rag] indexed 12 policy chunks
+RAG Context matched: Exclusions: Damage from pre-existing structural issues...
+
+--- Testing Summarize/Translate Handler ---
+Summary result Status: processed
+Summary result text: Rajesh Kumar Menon is claiming INR 1,45,000 for rear-end collision damage...
+Metrics latency total: {'extraction_latency_s': 0.98, ...}
+
+[SUCCESS] ALL HANDLERS VALIDATED SUCCESSFULLY LOCALLY!
+```
+✅ Validation successful — import statements, package configurations, and handlers operate correctly.
+
+---
+
+## Step 4 — Wire the Step Functions definition
+
+The state machine is defined inline inside `template.yaml` (Step 2).
+State sequence:
+1. `OCRState` (OCR extraction) -> catch error -> `HandleFailureState` (DynamoDB write)
+2. `ClassifyExtractState` (AI extraction) -> catch error -> `HandleFailureState`
+3. `CheckExtractionStatusState` (Choice: branch validation failures -> `HandleExtractionFailureState`)
+4. `RAGRetrieveState` (RAG policy match) -> catch error -> `HandleFailureState`
+5. `SummarizeTranslateState` (Summary generate) -> catch error -> `HandleFailureState`
+6. `WriteToDynamoDBState` (DynamoDB success write)
+
+All steps are robustly wrapped with error catching.
+
+---
+
+## Step 5 — Deploy (STOP GATE)
+
+**Execution Stack:** `insurance-claims-bedrock-poc-stack`
+**Region:** `us-east-1`
+**Capabilities:** `CAPABILITY_IAM`
+
+### Deployment Challenges & Refinements:
+1. **Directory bloat issue:** Discovered the workspace root folder was configured as the local Python environment directory, causing `sam build` to capture standard libraries and DLL binaries (1.25 GB total package). 
+   * *Resolution:* Structured a separate clean `backend/` folder containing only handler scripts, `src/` modules, and RAG policies. Modified `template.yaml` to target `CodeUri: backend/`. This reduced build artifact size from **1.25 GB** to **10 MB** (99.2% reduction).
+2. **Reserved Environment Key issue:** Initial deployment failed during Lambda creation with a `400 InvalidRequest` because `AWS_REGION` was defined in global environment variables (reserved key).
+   * *Resolution:* Removed `AWS_REGION` override from `template.yaml`.
+3. **Rollback reset:** Deleted the failed rolled back stack using `aws cloudformation delete-stack` and initiated a fresh clean deploy.
+
+```
+$ sam deploy --stack-name insurance-claims-bedrock-poc-stack --s3-bucket aws-sam-cli-managed-default-samclisourcebucket-htih1xarifd5 --capabilities CAPABILITY_IAM --region us-east-1 --no-confirm-changeset
+Initiating deployment
+=====================
+Changeset created successfully.
+2026-07-05 10:27:14 - Waiting for stack create/update to complete
+
+CloudFormation events from stack operations
+-------------------------------------------------------------------------------------------------
+CREATE_COMPLETE          AWS::DynamoDB::Table     ClaimResultsTable        -
+CREATE_COMPLETE          AWS::IAM::Role           RagRetrieveFunctionRole  -
+CREATE_COMPLETE          AWS::IAM::Role           ExtractClassifyFuncRole  -
+CREATE_COMPLETE          AWS::IAM::Role           SummarizeTranslateRole   -
+CREATE_COMPLETE          AWS::IAM::Role           OcrHandlerFunctionRole   -
+CREATE_COMPLETE          AWS::Lambda::Function    SummarizeTranslateFunc   -
+CREATE_COMPLETE          AWS::Lambda::Function    RagRetrieveFunction      -
+CREATE_COMPLETE          AWS::Lambda::Function    ExtractClassifyFunction  -
+CREATE_COMPLETE          AWS::Lambda::Function    OcrHandlerFunction       -
+CREATE_COMPLETE          AWS::IAM::Role           ClaimProcessingStateRole -
+CREATE_COMPLETE          AWS::StepFunctions::St   ClaimProcessingStateMach -
+CREATE_COMPLETE          AWS::CloudFormation::S   insurance-claims-bedrock -
+-------------------------------------------------------------------------------------------------
+Successfully created/updated stack - insurance-claims-bedrock-poc-stack in us-east-1
+```
+✅ Serverless Stack successfully deployed!
+
+---
+
+## Step 6 — Wire S3 → Lambda trigger (STOP GATE)
+
+Trigger architecture wired using Amazon EventBridge:
+1. Enabled EventBridge notification configuration on `claim-documents-poc-adhi`.
+2. Created a target execution role `EventBridgeTriggerStepFunctionRole` with a trust policy for `events.amazonaws.com`.
+3. Put role policy allowing EventBridge to run `states:StartExecution` on `ClaimProcessingStateMachine`.
+4. Created an EventBridge Rule `S3TriggerClaimProcessing` matching S3 Object Created events on the bucket.
+5. Wired the Rule to target the State Machine (`arn:aws:states:us-east-1:340752835441:stateMachine:ClaimProcessingStateMachine-sR74YVlzDnpW`), using an Input Transformer to map S3 bucket name and key directly to Step Functions inputs:
+   * Maps: `{"bucket": "$.detail.bucket.name", "key": "$.detail.object.key"}`
+
+```
+$ aws s3api put-bucket-notification-configuration --bucket claim-documents-poc-adhi --notification-configuration file://scratch/s3_eventbridge_config.json
+$ aws iam create-role --role-name EventBridgeTriggerStepFunctionRole --assume-role-policy-document file://scratch/eb_trust_policy.json
+$ aws iam put-role-policy --role-name EventBridgeTriggerStepFunctionRole --policy-name AllowStartExecution --policy-document file://scratch/eb_policy.json
+$ aws events put-rule --name S3TriggerClaimProcessing --event-pattern file://scratch/rule_event_pattern.json --state ENABLED
+$ aws events put-targets --rule S3TriggerClaimProcessing --targets file://scratch/eb_target.json
+{
+    "FailedEntryCount": 0,
+    "FailedEntries": []
+}
+```
+✅ Trigger configuration applied successfully!
+
+---
+
+## Step 7 — End-to-end live test
+
+1. Copy `sample_documents/claim_property_002.txt` to the S3 bucket to trigger the EventBridge integration:
+```
+$ aws s3 cp sample_documents/claim_property_002.txt s3://claim-documents-poc-adhi/claim_property_002.txt
+Completed 658 Bytes/658 Bytes (444 Bytes/s) with 1 file(s) remaining
+upload: sample_documents\claim_property_002.txt to s3://claim-documents-poc-adhi/claim_property_002.txt
+```
+
+2. List executions to ensure the state machine has run:
+```
+$ aws stepfunctions list-executions --state-machine-arn arn:aws:states:us-east-1:340752835441:stateMachine:ClaimProcessingStateMachine-sR74YVlzDnpW
+{
+    "executions": [
+        {
+            "executionArn": "arn:aws:states:us-east-1:340752835441:execution:ClaimProcessingStateMachine-sR74YVlzDnpW:14f51243-b040-8b87-89cd-6b6f913238ea_33b688f6-fc8c-3661-82c1-8b633f2a3106",
+            "stateMachineArn": "arn:aws:states:us-east-1:340752835441:stateMachine:ClaimProcessingStateMachine-sR74YVlzDnpW",
+            "name": "14f51243-b040-8b87-89cd-6b6f913238ea_33b688f6-fc8c-3661-82c1-8b633f2a3106",
+            "status": "SUCCEEDED",
+            "startDate": "2026-07-05T10:32:35.571000+05:30",
+            "stopDate": "2026-07-05T10:32:43.632000+05:30",
+            "redriveCount": 0
+        }
+    ]
+}
+```
+
+3. Scan the DynamoDB table to verify results were saved:
+```
+$ aws dynamodb scan --table-name ClaimResults
+{
+    "Items": [
+        {
+            "extracted_info": {
+                "M": {
+                    "claimant_name": { "S": "Priya Subramaniam" },
+                    "incident_description": { "S": "Heavy rainfall and water ingress on June 2, 2026..." },
+                    "claim_type": { "S": "property" },
+                    "policy_number": { "S": "PROP-TN-55097" },
+                    "claim_amount": { "N": "380000" },
+                    "incident_date": { "S": "2026-06-02" }
+                }
+            },
+            "summary": {
+                "S": "Priya Subramaniam is claiming INR 3,80,000 for rainfall-induced water damage to her Coimbatore property on 2026-06-02..."
+            },
+            "document_id": { "S": "claim_property_002.txt" },
+            "processed_timestamp": { "N": "1783227763" },
+            "status": { "S": "processed" }
+        }
+    ],
+    "Count": 1,
+    "ScannedCount": 1
+}
+```
+✅ Execution succeeded and result correctly written to DynamoDB! No laptop code or manual processes were involved after the upload!
+
+---
+
+## Step 8 — Update documentation
+
+
+
+
+

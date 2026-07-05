@@ -1,117 +1,96 @@
 # Insurance Claim Document Processor — Bedrock POC
 
-Automates extraction and summarization of insurance claim documents using
-Amazon Bedrock, with a lightweight RAG layer grounding summaries in actual
-policy coverage terms instead of letting the model guess.
+Automates extraction and summarization of insurance claim documents using Amazon Bedrock, with a lightweight RAG layer grounding summaries in actual policy coverage terms instead of letting the model guess.
 
 ## Architecture
 
+This project is deployed as serverless AWS infrastructure using **AWS SAM** and **AWS Step Functions**:
+
 ```
-S3 (claim documents)
-    -> Lambda trigger (S3 event)
-        -> Bedrock: extraction (Claude Haiku 4.5)      -> structured JSON
-        -> Policy RAG (Titan embeddings + policy KB)   -> coverage context
-            -> Bedrock: summary generation (Claude Sonnet 5)
-                -> Output store (S3 JSON + DynamoDB)
+S3 (claim-documents-poc-adhi)
+  -> S3 Event (Object Created)
+    -> EventBridge Rule (S3TriggerClaimProcessing)
+      -> Step Functions State Machine (ClaimProcessingStateMachine)
+         1. OCRState (OcrHandlerFunction Lambda)
+         2. ClassifyExtractState (ExtractClassifyFunction Lambda)
+         3. CheckExtractionStatusState (Choice Branch: fails -> DynamoDB)
+         4. RAGRetrieveState (RagRetrieveFunction Lambda)
+         5. SummarizeTranslateState (SummarizeTranslateFunction Lambda)
+         6. WriteToDynamoDBState (Writes final report to DynamoDB: ClaimResults)
 ```
 
-Two Bedrock calls per document, not one: a cheap/fast model for structured
-extraction, a stronger model for the prose an adjuster actually reads. This
-also gives you a natural A/B point for Step 4 (compare model performance).
-
-**Model choices and why:**
-
-| Stage | Model | Reasoning |
-|---|---|---|
-| Extraction | Claude Haiku 4.5 | Structured JSON extraction is cheap/mechanical — don't pay Sonnet prices |
-| Summary generation | Claude Sonnet 5 | Prose quality and reasoning about policy fit matter here |
-| Document understanding (scanned forms) | Claude Sonnet 5 (vision) | Only needed if you extend to image/PDF input — see extensions |
-| Embeddings | Titan Text Embeddings v2 | Native to Bedrock, no extra vendor dependency |
-
-Model IDs change frequently and depend on what your AWS account has been
-granted. Don't trust any ID in a tutorial (including this one) — run
-`discover_models.py` first.
-
-## Setup
+## Setup & Local Verification
 
 ```bash
-# 1. Create the S3 bucket
-aws s3 mb s3://claim-documents-poc-<your-initials>
-
-# 2. Install dependencies
+# 1. Install dependencies
 pip install -r requirements.txt
 
-# 3. Enable model access
-# AWS Console -> Bedrock -> Model access -> request Anthropic + Amazon Titan models
-
-# 4. Discover exact model IDs available to your account
+# 2. Discover model IDs
 python discover_models.py
 
-# 5. Copy and fill in your config
-cp .env.example .env
-# paste model IDs from step 4, set your bucket name
+# 3. Verify the handlers run correctly locally
+python scratch/verify_handlers.py
 ```
 
-## Running it
+## Serverless Deployment
 
-The pipeline works against local files in `sample_documents/` with zero AWS
-setup beyond Bedrock model access — useful for your first test pass before
-you touch S3 billing at all.
+We use the AWS Serverless Application Model (SAM) to build and deploy:
 
 ```bash
-# Process one document
-python run_poc.py process claim_auto_001.txt
+# 1. Build the serverless package
+sam build
 
-# Process all sample documents
-python run_poc.py process claim_auto_001.txt --all
-
-# Compare extraction/summary models on the same document
-python run_poc.py compare claim_auto_001.txt
+# 2. Deploy to AWS Cloud
+sam deploy --stack-name insurance-claims-bedrock-poc-stack --s3-bucket aws-sam-cli-managed-default-samclisourcebucket-htih1xarifd5 --capabilities CAPABILITY_IAM --region us-east-1 --no-confirm-changeset
 ```
 
-To run against real S3 instead of local files: upload the sample docs
-(`aws s3 cp sample_documents/ s3://your-bucket/ --recursive`), and
-`S3Handler` will detect valid AWS credentials automatically and switch
-from local fallback to S3.
+## Running the Serverless Pipeline (End-to-End)
+
+Once deployed, the pipeline is fully event-driven and triggers automatically when you copy files to S3:
+
+```bash
+# 1. Upload a claim document to S3
+aws s3 cp sample_documents/claim_property_002.txt s3://claim-documents-poc-adhi/
+
+# 2. List the active Step Functions executions
+aws stepfunctions list-executions --state-machine-arn <state-machine-arn>
+
+# 3. Scan the DynamoDB table to retrieve the generated claim report
+aws dynamodb scan --table-name ClaimResults
+```
+
+## Running the Web Dashboard (Local Adjuster Portal)
+
+To run the Flask Adjuster dashboard:
+
+```bash
+python app.py
+```
+Open **[http://127.0.0.1:5000](http://127.0.0.1:5000)** in your browser to view visual scan uploads, check real-time claimant fraud shield gauges, edit facts, and approve ledger payouts!
 
 ## Project structure
 
 ```
-src/
-  config.py             # env-driven config, fails loudly if model IDs unset
-  bedrock_client.py      # Converse API wrapper + Titan embeddings
-  s3_handler.py           # S3 I/O with local-file fallback for cheap testing
-  prompt_templates.py     # Step 3: reusable prompt template manager
-  rag_engine.py            # Step 2: simple in-memory RAG over policy docs
-  content_validator.py     # Step 3: JSON structure + injection-marker checks
-  processor.py              # orchestrates the full pipeline
-  model_comparator.py        # Step 4: side-by-side model comparison
-sample_documents/            # 3 synthetic claims (auto/property/health)
-policy_knowledge/             # synthetic policy excerpts, grounds the RAG step
-discover_models.py             # run first — lists real model IDs for your account
-run_poc.py                      # CLI entry point
-FINDINGS_TEMPLATE.md             # fill this in for the Step 4 deliverable
+backend/
+  lambdas/               # Serverless AWS Lambda handler modules
+  src/                   # Core shared backend code package
+  policy_knowledge/      # Policy coverage documents used in RAG
+  requirements.txt       # Clean Python backend dependencies
+app.py                   # Flask Local Adjuster dashboard server
+static/                  # Web dashboard UI files (HTML, CSS, JS)
+template.yaml            # AWS SAM Serverless template mapping resources
+.samignore               # SAM zipping exclusion rules
+EXECUTION_LOG.md         # Sequential execution logs
+SERVERLESS_MIGRATION.md  # Serverless migration notes and costs
 ```
 
 ## Cost management
 
-- Set a billing alert before you run this against real Bedrock calls:
-  AWS Console -> Billing -> Budgets -> create a $5 budget with an alert.
-- Haiku-class models cost a fraction of Sonnet-class per token — the
-  extraction step alone processing 3 sample docs will cost well under $0.01.
-- `aws s3 rb s3://your-bucket --force` and delete the Bedrock model access
-  grants when you're done, per the assignment's cleanup instructions.
-
-## Extending this (bonus challenges from the assignment)
-
-- **Flask web interface**: wrap `ClaimProcessor.process()` in a single
-  `/process` POST route — the processor is already decoupled from any
-  particular entry point.
-- **Content filtering for PII**: extend `content_validator.py` — you
-  already have `claimant_name`/contact info isolated post-extraction,
-  so redaction before logging is a small addition.
-- **Feedback mechanism**: log `(document_key, model_id, adjuster_correction)`
-  tuples to a DynamoDB table; that becomes eval data for prompt tuning later.
-- **Scanned/image claims**: swap the extraction call to pass the document
-  as an image content block instead of text, using a vision-capable model —
-  the `BedrockClient.invoke()` signature would need a `document_bytes` param.
+- The serverless stack operates **100% inside the AWS Free Tier** for testing scale:
+  - AWS Lambda: 1 Million requests/month free.
+  - AWS DynamoDB: 25 RCUs / WCUs free (permanent).
+  - AWS Step Functions: 4,000 state transitions/month free.
+  - Bedrock: Configured to run `BEDROCK_MOCK=1` in our global stack template to avoid payment/instrument blocker fees.
+- Clean up resources when done:
+  - CloudFormation stack: `sam delete`
+  - S3 bucket: `aws s3 rb s3://claim-documents-poc-adhi --force`

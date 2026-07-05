@@ -1,0 +1,14 @@
+[
+  {
+    "Id": "1",
+    "Arn": "arn:aws:states:us-east-1:340752835441:stateMachine:ClaimProcessingStateMachine-sR74YVlzDnpW",
+    "RoleArn": "arn:aws:iam::340752835441:role/EventBridgeTriggerStepFunctionRole",
+    "InputTransformer": {
+      "InputPathsMap": {
+        "bucket": "$.detail.bucket.name",
+        "key": "$.detail.object.key"
+      },
+      "InputTemplate": "{\"bucket\": \"<bucket>\", \"key\": \"<key>\"}"
+    }
+  }
+]

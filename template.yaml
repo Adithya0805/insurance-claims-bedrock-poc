@@ -1,0 +1,205 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: AWS SAM template for serverless Insurance Claims Bedrock POC pipeline
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        BEDROCK_MOCK: "1"  # Set to "0" when payment method is ready
+        S3_BUCKET: "claim-documents-poc-adhi"
+
+Resources:
+
+  # 1. DynamoDB Table for Claims Results
+  ClaimResultsTable:
+    Type: AWS::Serverless::SimpleTable
+    Properties:
+      TableName: ClaimResults
+      PrimaryKey:
+        Name: document_id
+        Type: String
+
+  # 2. OCR Lambda Function
+  OcrHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: lambdas.ocr_handler.handler
+      Policies:
+        - S3ReadPolicy:
+            BucketName: "claim-documents-poc-adhi"
+
+  # 3. Extract/Classify Lambda Function
+  ExtractClassifyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: lambdas.extract_classify_handler.handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:Converse
+              Resource: "*"
+
+  # 4. RAG Retrieve Lambda Function
+  RagRetrieveFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: lambdas.rag_retrieve_handler.handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:Converse
+              Resource: "*"
+
+  # 5. Summarize Lambda Function
+  SummarizeTranslateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: lambdas.summarize_translate_handler.handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:Converse
+              Resource: "*"
+
+  # 6. Step Functions State Machine (Orchestrator)
+  ClaimProcessingStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Definition:
+        Comment: "Orchestrates Insurance Claim OCR, Extraction, RAG Policy check, and Summary drafting."
+        StartAt: OCRState
+        States:
+          
+          # State 1: OCR Extraction
+          OCRState:
+            Type: Task
+            Resource: !GetAtt OcrHandlerFunction.Arn
+            Next: ClassifyExtractState
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                Next: HandleFailureState
+
+          # State 2: Classify and Extract details
+          ClassifyExtractState:
+            Type: Task
+            Resource: !GetAtt ExtractClassifyFunction.Arn
+            Next: CheckExtractionStatusState
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                Next: HandleFailureState
+
+          # Branch Choice: Check if validation/extraction failed
+          CheckExtractionStatusState:
+            Type: Choice
+            Choices:
+              - Variable: "$.status"
+                StringEquals: "extraction_failed"
+                Next: HandleExtractionFailureState
+            Default: RAGRetrieveState
+
+          # State 3: RAG Policy Check
+          RAGRetrieveState:
+            Type: Task
+            Resource: !GetAtt RagRetrieveFunction.Arn
+            Next: SummarizeTranslateState
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                Next: HandleFailureState
+
+          # State 4: Summarize and Draft Report
+          SummarizeTranslateState:
+            Type: Task
+            Resource: !GetAtt SummarizeTranslateFunction.Arn
+            Next: WriteToDynamoDBState
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                Next: HandleFailureState
+
+          # State 5: Write Success result to DynamoDB
+          WriteToDynamoDBState:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:putItem
+            Parameters:
+              TableName: "ClaimResults"
+              Item:
+                document_id:
+                  S.$: "$.document_id"
+                status:
+                  S.$: "$.status"
+                extracted_info:
+                  M:
+                    claimant_name:
+                      S.$: "$.extracted_info.claimant_name"
+                    policy_number:
+                      S.$: "$.extracted_info.policy_number"
+                    incident_date:
+                      S.$: "$.extracted_info.incident_date"
+                    claim_amount:
+                      N.$: "States.Format('{}', $.extracted_info.claim_amount)"
+                    incident_description:
+                      S.$: "$.extracted_info.incident_description"
+                    claim_type:
+                      S.$: "$.extracted_info.claim_type"
+                summary:
+                  S.$: "$.summary"
+                processed_timestamp:
+                  N.$: "States.Format('{}', $.processed_timestamp)"
+            End: true
+
+          # Handle OCR/Model general failure states
+          HandleFailureState:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:putItem
+            Parameters:
+              TableName: "ClaimResults"
+              Item:
+                document_id:
+                  S.$: "$.key"
+                status:
+                  S: "pipeline_failure"
+                error:
+                  S: "An unexpected pipeline execution error occurred"
+            End: true
+
+          # Handle specific extraction validation failure state
+          HandleExtractionFailureState:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:putItem
+            Parameters:
+              TableName: "ClaimResults"
+              Item:
+                document_id:
+                  S.$: "$.document_id"
+                status:
+                  S: "extraction_failed"
+                errors:
+                  S.$: "States.JsonToString($.errors)"
+                raw_output:
+                  S.$: "$.raw_output"
+            End: true
+
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref OcrHandlerFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ExtractClassifyFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref RagRetrieveFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref SummarizeTranslateFunction
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClaimResultsTable
